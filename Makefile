@@ -3,10 +3,12 @@ OUTPUT_DIR := output
 BIN := $(OUTPUT_DIR)/$(APP_NAME)
 PID_FILE := $(OUTPUT_DIR)/$(APP_NAME).pid
 RUN_LOG := $(OUTPUT_DIR)/$(APP_NAME).stdout.log
+OUTPUT_BIN := ./$(APP_NAME)
+OUTPUT_CONFIG := $(OUTPUT_DIR)/config.yaml
 GO ?= go
 GOCACHE ?= $(CURDIR)/.gocache
 
-.PHONY: help build run start stop restart status logs test clean
+.PHONY: help build prepare-runtime run start stop restart status logs test clean
 
 help:
 	@echo "Targets:"
@@ -25,16 +27,26 @@ build:
 	GOCACHE=$(GOCACHE) $(GO) build -o $(BIN) .
 	@echo "Built $(BIN)"
 
-run: build
-	$(BIN)
+prepare-runtime: build
+	@if [ ! -f "config.yaml" ]; then \
+		echo "config.yaml not found. Create it from config.yaml.example first."; \
+		exit 1; \
+	fi
+	@cp config.yaml "$(OUTPUT_CONFIG)"
+	@mkdir -p "$(OUTPUT_DIR)/logs" "$(OUTPUT_DIR)/reports"
+	@echo "Runtime config copied to $(OUTPUT_CONFIG)"
 
-start: build
+run: prepare-runtime
+	@echo "Running from $(OUTPUT_DIR); logs and reports will be written under $(OUTPUT_DIR)/"
+	cd $(OUTPUT_DIR) && $(OUTPUT_BIN)
+
+start: prepare-runtime
 	@mkdir -p $(OUTPUT_DIR)
 	@if [ -f "$(PID_FILE)" ] && kill -0 "$$(cat $(PID_FILE))" 2>/dev/null; then \
 		echo "$(APP_NAME) is already running with pid $$(cat $(PID_FILE))"; \
 		exit 1; \
 	fi
-	@nohup $(BIN) > "$(RUN_LOG)" 2>&1 & echo $$! > "$(PID_FILE)"
+	@cd $(OUTPUT_DIR) && nohup $(OUTPUT_BIN) > "$(APP_NAME).stdout.log" 2>&1 & echo $$! > "$(CURDIR)/$(PID_FILE)"
 	@echo "$(APP_NAME) started with pid $$(cat $(PID_FILE))"
 	@echo "Log: $(RUN_LOG)"
 
