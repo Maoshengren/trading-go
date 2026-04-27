@@ -1,9 +1,13 @@
 package agents
 
-import "trading-go/state"
+import (
+	"context"
+
+	"trading-go/state"
+)
 
 type Agent interface {
 	Name() string
 	Description() string
-	Run(*state.AgentState) error
+	Run(context.Context, *state.AgentState) error
 }

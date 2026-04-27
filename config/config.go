@@ -2,21 +2,57 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
 
 type LLMConfig struct {
-	Model  string `mapstructure:"model"`
-	APIKey string `mapstructure:"api_key"`
+	Provider    string  `mapstructure:"provider"`
+	Model       string  `mapstructure:"model"`
+	APIKey      string  `mapstructure:"api_key"`
+	BaseURL     string  `mapstructure:"base_url"`
+	Temperature float32 `mapstructure:"temperature"`
+}
+
+type MarketDataConfig struct {
+	Provider       string `mapstructure:"provider"`
+	DefaultRegion  string `mapstructure:"default_region"`
+	AnalysisPeriod string `mapstructure:"analysis_period"`
+}
+
+type LogConfig struct {
+	Level    string `mapstructure:"level"`
+	Path     string `mapstructure:"path"`
+	TraceDir string `mapstructure:"trace_dir"`
+}
+
+type AnalystConfig struct {
+	Enabled []string `mapstructure:"enabled"`
+}
+
+type ExecutionConfig struct {
+	Enabled                 bool    `mapstructure:"enabled"`
+	DryRun                  bool    `mapstructure:"dry_run"`
+	OrderType               string  `mapstructure:"order_type"`
+	TimeInForce             string  `mapstructure:"time_in_force"`
+	Leverage                int     `mapstructure:"leverage"`
+	PricePeriod             string  `mapstructure:"price_period"`
+	ProtectiveOrdersEnabled bool    `mapstructure:"protective_orders_enabled"`
+	TakeProfitPercent       float64 `mapstructure:"take_profit_percent"`
+	StopLossPercent         float64 `mapstructure:"stop_loss_percent"`
 }
 
 type Config struct {
-	Symbol              string    `mapstructure:"symbol"`
-	DebateRounds        int       `mapstructure:"debate_rounds"`
-	LoopIntervalSeconds int       `mapstructure:"loop_interval_seconds"`
-	Mode                string    `mapstructure:"mode"`
-	LLM                 LLMConfig `mapstructure:"llm_config"`
+	Symbol              string           `mapstructure:"symbol"`
+	DebateRounds        int              `mapstructure:"debate_rounds"`
+	LoopIntervalSeconds int              `mapstructure:"loop_interval_seconds"`
+	Mode                string           `mapstructure:"mode"`
+	Analysts            AnalystConfig    `mapstructure:"analyst_config"`
+	Execution           ExecutionConfig  `mapstructure:"execution_config"`
+	MarketData          MarketDataConfig `mapstructure:"market_data"`
+	Log                 LogConfig        `mapstructure:"log_config"`
+	LLM                 LLMConfig        `mapstructure:"llm_config"`
 }
 
 func Load(path string) (*Config, error) {
@@ -28,7 +64,25 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("debate_rounds", 2)
 	v.SetDefault("loop_interval_seconds", 60)
 	v.SetDefault("mode", "single")
+	v.SetDefault("analyst_config.enabled", []string{"fundamental", "sentiment", "news", "technical"})
+	v.SetDefault("execution_config.enabled", true)
+	v.SetDefault("execution_config.dry_run", false)
+	v.SetDefault("execution_config.order_type", "market")
+	v.SetDefault("execution_config.time_in_force", "GTC")
+	v.SetDefault("execution_config.leverage", 1)
+	v.SetDefault("execution_config.price_period", "1m")
+	v.SetDefault("execution_config.protective_orders_enabled", true)
+	v.SetDefault("execution_config.take_profit_percent", 0.015)
+	v.SetDefault("execution_config.stop_loss_percent", 0.008)
+	v.SetDefault("market_data.provider", "auto")
+	v.SetDefault("market_data.default_region", "US")
+	v.SetDefault("market_data.analysis_period", "1d")
+	v.SetDefault("log_config.level", "info")
+	v.SetDefault("log_config.path", "logs/trading-go.log")
+	v.SetDefault("log_config.trace_dir", "logs/traces")
+	v.SetDefault("llm_config.provider", "openai")
 	v.SetDefault("llm_config.model", "gpt-4o-mini")
+	v.SetDefault("llm_config.temperature", float32(0.2))
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -38,5 +92,33 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	cfg.Analysts.Enabled = normalizeAnalystNames(cfg.Analysts.Enabled)
 	return &cfg, nil
+}
+
+func normalizeAnalystNames(items []string) []string {
+	if len(items) == 0 {
+		return []string{"fundamental", "sentiment", "news", "technical"}
+	}
+
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		name := strings.ToLower(strings.TrimSpace(item))
+		switch name {
+		case "fundamental", "sentiment", "news", "technical":
+		default:
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+
+	if len(result) == 0 {
+		return []string{"technical"}
+	}
+	return result
 }
