@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
@@ -24,18 +25,22 @@ type portfolioPayload struct {
 	PositionSnapshot *tools.AccountSnapshot `json:"position_snapshot,omitempty"`
 }
 
+type final struct {
+	Execution             string  `json:"execution"`
+	Action                string  `json:"action"`
+	Direction             string  `json:"direction"`
+	ApprovedPositionSize  float64 `json:"approved_position_size"`
+	ApprovedPositionRatio float64 `json:"approved_position_ratio"`
+	TargetPositionQty     float64 `json:"target_position_qty"`
+	Summary               string  `json:"summary"`
+}
+
 func (a *ManagerAgent) Name() string { return "PortfolioManagerAgent" }
 func (a *ManagerAgent) Description() string {
 	return "Approve and sign final execution decision."
 }
 func (a *ManagerAgent) Run(ctx context.Context, s *state.AgentState) error {
-	type final struct {
-		Execution            string  `json:"execution"`
-		ApprovedPositionSize float64 `json:"approved_position_size"`
-		Summary              string  `json:"summary"`
-	}
 	var f final
-
 	payload, err := buildPortfolioPayload(ctx, s)
 	if err != nil {
 		return err
@@ -50,15 +55,28 @@ func (a *ManagerAgent) Run(ctx context.Context, s *state.AgentState) error {
 	}
 
 	execution := normalizeExecution(f.Execution)
-	approvedPositionSize := clampPositionSize(f.ApprovedPositionSize, execution, s.TraderDecision.PositionSize)
+	action := normalizeAction(f.Action, execution)
+	direction := normalizePortfolioDirection(f.Direction, s.TraderDecision.Direction, action, f.Summary)
+	approvedPositionRatio := clampPositionRatio(f.ApprovedPositionRatio, execution, s.TraderDecision.PositionSize)
+	targetPositionQty := clampNonNegative(f.TargetPositionQty)
+	approvedPositionSize := normalizeApprovedPositionSize(f.ApprovedPositionSize, execution, action, approvedPositionRatio, targetPositionQty, s.TraderDecision.PositionSize)
 	s.PortfolioDecision = state.PortfolioDecision{
-		Execution:            execution,
-		Summary:              f.Summary,
-		ApprovedPositionSize: approvedPositionSize,
+		Execution:             execution,
+		Action:                action,
+		Direction:             direction,
+		Summary:               f.Summary,
+		ApprovedPositionSize:  approvedPositionSize,
+		ApprovedPositionRatio: approvedPositionRatio,
+		TargetPositionQty:     targetPositionQty,
 	}
 	s.FinalDecision = fmt.Sprintf(
-		"%s | %s | sign=PortfolioManager(LLM)",
+		"%s | action=%s | direction=%s | approved_position_size=%.4f | approved_position_ratio=%.4f | target_position_qty=%.8f | %s | sign=PortfolioManager(LLM)",
 		execution,
+		action,
+		direction,
+		approvedPositionSize,
+		approvedPositionRatio,
+		targetPositionQty,
 		f.Summary,
 	)
 
@@ -66,7 +84,10 @@ func (a *ManagerAgent) Run(ctx context.Context, s *state.AgentState) error {
 		"agent":                  a.Name(),
 		"symbol":                 s.Symbol,
 		"execution":              execution,
+		"action":                 action,
+		"direction":              direction,
 		"approved_position_size": approvedPositionSize,
+		"target_position_qty":    targetPositionQty,
 		"risk_check":             s.RiskReview.Conclusion,
 	}).Info("producing final portfolio decision")
 	return nil
@@ -81,7 +102,64 @@ func normalizeExecution(v string) string {
 	}
 }
 
-func clampPositionSize(v float64, execution string, traderPositionSize float64) float64 {
+func normalizeAction(v, execution string) string {
+	if execution == "拒绝" {
+		return "reject"
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "open", "increase", "reduce", "close", "hold", "reject":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		if execution == "拒绝" {
+			return "reject"
+		}
+		return "hold"
+	}
+}
+
+func normalizePortfolioDirection(v, traderDirection, action, summary string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "buy", "sell", "hold":
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+	if action == "reject" || action == "hold" {
+		return "hold"
+	}
+	switch strings.ToLower(strings.TrimSpace(traderDirection)) {
+	case "buy", "sell":
+		return strings.ToLower(strings.TrimSpace(traderDirection))
+	}
+	lowerSummary := strings.ToLower(summary)
+	switch {
+	case strings.Contains(summary, "空头") && (action == "reduce" || action == "close"):
+		return "buy"
+	case strings.Contains(summary, "多头") && (action == "reduce" || action == "close"):
+		return "sell"
+	case strings.Contains(lowerSummary, "short") && (action == "reduce" || action == "close"):
+		return "buy"
+	case strings.Contains(lowerSummary, "long") && (action == "reduce" || action == "close"):
+		return "sell"
+	default:
+		return "hold"
+	}
+}
+
+func normalizeApprovedPositionSize(v float64, execution, action string, ratio, targetQty, traderPositionSize float64) float64 {
+	if execution == "拒绝" {
+		return 0
+	}
+	if action == "reduce" || action == "close" {
+		if targetQty > 0 {
+			return targetQty
+		}
+	}
+	if v > 0 {
+		return clampNonNegative(v)
+	}
+	return clampPositionRatio(ratio, execution, traderPositionSize)
+}
+
+func clampPositionRatio(v float64, execution string, traderPositionSize float64) float64 {
 	if execution == "拒绝" {
 		return 0
 	}
@@ -98,6 +176,13 @@ func clampPositionSize(v float64, execution string, traderPositionSize float64) 
 		if traderPositionSize > 0 {
 			return traderPositionSize
 		}
+	}
+	return v
+}
+
+func clampNonNegative(v float64) float64 {
+	if v < 0 {
+		return 0
 	}
 	return v
 }

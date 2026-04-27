@@ -20,7 +20,23 @@ execution_config:
 market_data:
   provider: binance_futures # auto | longbridge | binance | binance_futures
   default_region: US
-  analysis_period: 15m # Crypto futures: 15m/1h. Stocks: 1d.
+  # The first timeframe is the primary trading timeframe. Later items are trend context.
+  kline_timeframes:
+    - name: execution
+      period: 15m
+      bars: 192 # 2 days, execution rhythm and local volatility.
+      recent_bars: 96
+      indicator_bars: 32
+    - name: trend
+      period: 1h
+      bars: 240 # 10 days, intraday trend anchor.
+      recent_bars: 96
+      indicator_bars: 40
+    - name: macro
+      period: 4h
+      bars: 180 # 30 days, larger trend and key levels.
+      recent_bars: 72
+      indicator_bars: 40
 
 log_config:
   level: info

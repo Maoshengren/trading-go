@@ -20,9 +20,23 @@ import (
 const technicalPayloadRecentBars = 120
 const technicalPayloadIndicatorSeries = 20
 
+type KLineTimeframeConfig struct {
+	Name          string
+	Period        string
+	Bars          int
+	RecentBars    int
+	IndicatorBars int
+}
+
 type technicalPayload struct {
-	Symbol          string                    `json:"symbol"`
-	AnalysisPeriod  string                    `json:"analysis_period"`
+	Symbol     string               `json:"symbol"`
+	Timeframes []technicalTimeframe `json:"timeframes"`
+}
+
+type technicalTimeframe struct {
+	Name            string                    `json:"name"`
+	Period          string                    `json:"period"`
+	BarCount        int                       `json:"bar_count"`
 	Snapshot        *tools.TechnicalSnapshot  `json:"snapshot"`
 	RecentBars      []technicalPayloadBar     `json:"recent_bars"`
 	IndicatorSeries []technicalIndicatorPoint `json:"indicator_series"`
@@ -55,14 +69,14 @@ type technicalIndicatorPoint struct {
 
 // TechnicalAnalystAgent 负责技术面分析：从 K 线与指标计算得到交易信号描述。
 type TechnicalAnalystAgent struct {
-	agent          adk.Agent
-	boundTools     []toolcomponent.BaseTool
-	systemPrompt   string
-	analysisPeriod string
+	agent        adk.Agent
+	boundTools   []toolcomponent.BaseTool
+	systemPrompt string
+	timeframes   []KLineTimeframeConfig
 }
 
 // NewTechnicalAnalystAgent 创建技术分析 Agent，并绑定行情与指标工具。
-func NewTechnicalAnalystAgent(period string) (*TechnicalAnalystAgent, error) {
+func NewTechnicalAnalystAgent(timeframes []KLineTimeframeConfig) (*TechnicalAnalystAgent, error) {
 	klineTool, err := buildKlineTool()
 	if err != nil {
 		return nil, err
@@ -77,10 +91,10 @@ func NewTechnicalAnalystAgent(period string) (*TechnicalAnalystAgent, error) {
 		return nil, err
 	}
 	return &TechnicalAnalystAgent{
-		agent:          agent,
-		boundTools:     ts,
-		systemPrompt:   prompts.TechnicalAnalystSystem,
-		analysisPeriod: normalizeAnalysisPeriod(period),
+		agent:        agent,
+		boundTools:   ts,
+		systemPrompt: prompts.TechnicalAnalystSystem,
+		timeframes:   normalizeKLineTimeframes(timeframes),
 	}, nil
 }
 
@@ -96,8 +110,8 @@ func (a *TechnicalAnalystAgent) Tools() []toolcomponent.BaseTool {
 	return a.boundTools
 }
 
-func (a *TechnicalAnalystAgent) SetAnalysisPeriod(period string) {
-	a.analysisPeriod = normalizeAnalysisPeriod(period)
+func (a *TechnicalAnalystAgent) SetTimeframes(timeframes []KLineTimeframeConfig) {
+	a.timeframes = normalizeKLineTimeframes(timeframes)
 }
 
 // Run 执行技术分析：拉取 K 线、计算指标、调用 ADK 生成报告、回写状态。
@@ -106,14 +120,21 @@ func (a *TechnicalAnalystAgent) Run(ctx context.Context, s *state.AgentState) er
 		return err
 	}
 
-	klines, snapshot, err := a.loadSnapshot(ctx, s.Symbol)
+	timeframes, err := a.loadTimeframes(ctx, s.Symbol)
 	if err != nil {
 		return err
 	}
+	primary := timeframes[0]
 
-	logx.Logger(ctx).WithFields(logrus.Fields{"agent": a.Name(), "symbol": s.Symbol, "kline_count": len(klines)}).Info("start running technical analysis")
+	logx.Logger(ctx).WithFields(logrus.Fields{
+		"agent":           a.Name(),
+		"symbol":          s.Symbol,
+		"kline_count":     primary.BarCount,
+		"timeframe_count": len(timeframes),
+		"primary_period":  primary.Period,
+	}).Info("start running technical analysis")
 
-	payload, err := buildTechnicalPayload(s.Symbol, a.analysisPeriod, klines, snapshot)
+	payload, err := buildTechnicalPayload(s.Symbol, timeframes)
 	if err != nil {
 		logx.Logger(ctx).WithError(err).WithField("agent", a.Name()).Error("failed to build technical payload")
 		return err
@@ -130,12 +151,10 @@ func (a *TechnicalAnalystAgent) Run(ctx context.Context, s *state.AgentState) er
 
 func (a *TechnicalAnalystAgent) ensureInitialized() error {
 	if a.agent != nil {
-		if a.analysisPeriod == "" {
-			a.analysisPeriod = normalizeAnalysisPeriod("")
-		}
+		a.timeframes = normalizeKLineTimeframes(a.timeframes)
 		return nil
 	}
-	b, err := NewTechnicalAnalystAgent(a.analysisPeriod)
+	b, err := NewTechnicalAnalystAgent(a.timeframes)
 	if err != nil {
 		return err
 	}
@@ -143,32 +162,48 @@ func (a *TechnicalAnalystAgent) ensureInitialized() error {
 	return nil
 }
 
-func (a *TechnicalAnalystAgent) loadSnapshot(ctx context.Context, symbol string) ([]tools.KLine, *tools.TechnicalSnapshot, error) {
-	klines, err := tools.GetKline(symbol, a.analysisPeriod)
-	if err != nil {
-		logx.Logger(ctx).WithError(err).WithField("agent", a.Name()).Error("failed to fetch klines")
-		return nil, nil, err
+func (a *TechnicalAnalystAgent) loadTimeframes(ctx context.Context, symbol string) ([]technicalTimeframe, error) {
+	configs := normalizeKLineTimeframes(a.timeframes)
+	out := make([]technicalTimeframe, 0, len(configs))
+	for _, cfg := range configs {
+		// Each configured timeframe is fetched and summarized independently.
+		// The first item is the primary trading timeframe; later items provide trend context.
+		klines, err := tools.GetKlineWithLimit(symbol, cfg.Period, cfg.Bars)
+		if err != nil {
+			logx.Logger(ctx).WithError(err).WithFields(logrus.Fields{"agent": a.Name(), "period": cfg.Period}).Error("failed to fetch klines")
+			return nil, err
+		}
+		snapshot, err := tools.BuildTechnicalSnapshot(klines)
+		if err != nil {
+			logx.Logger(ctx).WithError(err).WithFields(logrus.Fields{"agent": a.Name(), "period": cfg.Period}).Error("failed to build technical snapshot")
+			return nil, err
+		}
+		indicatorSeries, err := tools.BuildTechnicalIndicatorSeries(klines, cfg.IndicatorBars)
+		if err != nil {
+			return nil, fmt.Errorf("build technical indicator series for %s: %w", cfg.Period, err)
+		}
+		out = append(out, technicalTimeframe{
+			Name:            cfg.Name,
+			Period:          cfg.Period,
+			BarCount:        len(klines),
+			Snapshot:        snapshot,
+			RecentBars:      buildRecentTechnicalBars(klines, cfg.RecentBars),
+			IndicatorSeries: buildTechnicalIndicatorPayloadSeries(indicatorSeries),
+		})
 	}
-
-	snapshot, err := tools.BuildTechnicalSnapshot(klines)
-	if err != nil {
-		logx.Logger(ctx).WithError(err).WithField("agent", a.Name()).Error("failed to build technical snapshot")
-		return nil, nil, err
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no technical timeframes configured")
 	}
-	return klines, snapshot, nil
+	return out, nil
 }
 
-func buildTechnicalPayload(symbol, period string, klines []tools.KLine, snapshot *tools.TechnicalSnapshot) (string, error) {
-	indicatorSeries, err := tools.BuildTechnicalIndicatorSeries(klines, technicalPayloadIndicatorSeries)
-	if err != nil {
-		return "", fmt.Errorf("build technical indicator series: %w", err)
+func buildTechnicalPayload(symbol string, timeframes []technicalTimeframe) (string, error) {
+	if len(timeframes) == 0 {
+		return "", fmt.Errorf("no technical timeframes provided")
 	}
 	payload := technicalPayload{
-		Symbol:          strings.ToUpper(strings.TrimSpace(symbol)),
-		AnalysisPeriod:  period,
-		Snapshot:        snapshot,
-		RecentBars:      buildRecentTechnicalBars(klines, technicalPayloadRecentBars),
-		IndicatorSeries: buildTechnicalIndicatorPayloadSeries(indicatorSeries),
+		Symbol:     strings.ToUpper(strings.TrimSpace(symbol)),
+		Timeframes: timeframes,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -177,12 +212,75 @@ func buildTechnicalPayload(symbol, period string, klines []tools.KLine, snapshot
 	return string(data), nil
 }
 
-func normalizeAnalysisPeriod(period string) string {
+func normalizeKLinePeriod(period string) string {
 	period = strings.ToLower(strings.TrimSpace(period))
 	if period == "" {
 		return "1d"
 	}
 	return period
+}
+
+func defaultTechnicalTimeframes() []KLineTimeframeConfig {
+	return []KLineTimeframeConfig{{
+		Name:          "execution",
+		Period:        "15m",
+		Bars:          technicalPayloadRecentBars,
+		RecentBars:    technicalPayloadRecentBars,
+		IndicatorBars: technicalPayloadIndicatorSeries,
+	}}
+}
+
+func normalizeKLineTimeframes(items []KLineTimeframeConfig) []KLineTimeframeConfig {
+	if len(items) == 0 {
+		return defaultTechnicalTimeframes()
+	}
+	out := make([]KLineTimeframeConfig, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for i, item := range items {
+		period := normalizeKLinePeriod(item.Period)
+		if _, ok := seen[period]; ok {
+			continue
+		}
+		seen[period] = struct{}{}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			if i == 0 {
+				name = "primary"
+			} else {
+				name = period
+			}
+		}
+		bars := item.Bars
+		if bars <= 0 {
+			bars = technicalPayloadRecentBars
+		}
+		recentBars := item.RecentBars
+		if recentBars <= 0 || recentBars > bars {
+			recentBars = minInt(bars, technicalPayloadRecentBars)
+		}
+		indicatorBars := item.IndicatorBars
+		if indicatorBars <= 0 || indicatorBars > bars {
+			indicatorBars = minInt(bars, technicalPayloadIndicatorSeries)
+		}
+		out = append(out, KLineTimeframeConfig{
+			Name:          name,
+			Period:        period,
+			Bars:          bars,
+			RecentBars:    recentBars,
+			IndicatorBars: indicatorBars,
+		})
+	}
+	if len(out) == 0 {
+		return defaultTechnicalTimeframes()
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func buildRecentTechnicalBars(klines []tools.KLine, limit int) []technicalPayloadBar {

@@ -7,6 +7,10 @@ type MarketDataProvider interface {
 	GetKline(symbol, period string) ([]KLine, error)
 }
 
+type KLineLimitProvider interface {
+	GetKlineWithLimit(symbol, period string, limit int) ([]KLine, error)
+}
+
 type AccountProvider interface {
 	GetAccountSnapshot(symbols []string) (*AccountSnapshot, error)
 }

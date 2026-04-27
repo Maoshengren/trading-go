@@ -99,6 +99,10 @@ func (p *Provider) GetNews(symbol string, days int) ([]core.NewsItem, error) {
 }
 
 func (p *Provider) GetKline(symbol, period string) ([]core.KLine, error) {
+	return p.GetKlineWithLimit(symbol, period, DefaultBars)
+}
+
+func (p *Provider) GetKlineWithLimit(symbol, period string, limit int) ([]core.KLine, error) {
 	normalizedSymbol, err := NormalizeSymbol(symbol, p.defaultRegion)
 	if err != nil {
 		return nil, err
@@ -108,12 +112,18 @@ func (p *Provider) GetKline(symbol, period string) ([]core.KLine, error) {
 	if err != nil {
 		return nil, err
 	}
+	if limit <= 0 {
+		limit = DefaultBars
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
 
 	items, err := p.quoteCtx.Candlesticks(
 		context.Background(),
 		normalizedSymbol,
 		normalizedPeriod,
-		DefaultBars,
+		int32(limit),
 		lbquote.AdjustTypeForward,
 	)
 	if err != nil {

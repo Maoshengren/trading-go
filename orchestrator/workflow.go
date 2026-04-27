@@ -49,7 +49,8 @@ type Workflow struct {
 	Portfolio       *portfolio.ManagerAgent
 	Execution       *execution.Agent
 	enabledAnalysts []string
-	analysisPeriod  string
+	klineTimeframes []analyst.KLineTimeframeConfig
+	primaryPeriod   string
 	rootRunnable    compose.Runnable[*state.AgentState, *state.AgentState]
 }
 
@@ -61,11 +62,12 @@ type workflowState struct {
 	agentState *state.AgentState
 }
 
-func NewWorkflow(debateRounds int, enabledAnalysts []string, analysisPeriod string, executionAgent *execution.Agent) *Workflow {
+func NewWorkflow(debateRounds int, enabledAnalysts []string, klineTimeframes []analyst.KLineTimeframeConfig, executionAgent *execution.Agent) *Workflow {
 	bull := &research.BullResearcherAgent{}
 	bear := &research.BearResearcherAgent{}
 	technical := &analyst.TechnicalAnalystAgent{}
-	technical.SetAnalysisPeriod(analysisPeriod)
+	technical.SetTimeframes(klineTimeframes)
+	primaryPeriod := primaryKLinePeriod(klineTimeframes)
 	if len(enabledAnalysts) == 0 {
 		enabledAnalysts = []string{"fundamental", "sentiment", "news", "technical"}
 	}
@@ -83,8 +85,16 @@ func NewWorkflow(debateRounds int, enabledAnalysts []string, analysisPeriod stri
 		Portfolio:       &portfolio.ManagerAgent{},
 		Execution:       executionAgent,
 		enabledAnalysts: append([]string(nil), enabledAnalysts...),
-		analysisPeriod:  analysisPeriod,
+		klineTimeframes: append([]analyst.KLineTimeframeConfig(nil), klineTimeframes...),
+		primaryPeriod:   primaryPeriod,
 	}
+}
+
+func primaryKLinePeriod(items []analyst.KLineTimeframeConfig) string {
+	if len(items) == 0 || strings.TrimSpace(items[0].Period) == "" {
+		return "15m"
+	}
+	return strings.ToLower(strings.TrimSpace(items[0].Period))
 }
 
 func (w *Workflow) Run(ctx context.Context, s *state.AgentState) error {
@@ -250,7 +260,7 @@ func (w *Workflow) traderNode(ctx context.Context, _ string) (string, error) {
 }
 
 func (w *Workflow) riskAnalystNode(ctx context.Context, _ string) (string, error) {
-	riskCtx := risk.WithAnalysisPeriod(ctx, w.analysisPeriod)
+	riskCtx := risk.WithAnalysisPeriod(ctx, w.primaryPeriod)
 	return "risk_analyst_ready", w.runStatefulNode(riskCtx, w.RiskAnalyst.Run, func(dst, src *state.AgentState) {
 		dst.RiskAssessmentReport = src.RiskAssessmentReport
 	})

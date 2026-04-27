@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"trading-go/agents/analyst"
 	"trading-go/agents/execution"
 	"trading-go/config"
 	"trading-go/internal/llm"
@@ -61,7 +62,7 @@ func main() {
 	flow := orchestrator.NewWorkflow(
 		cfg.DebateRounds,
 		cfg.Analysts.Enabled,
-		cfg.MarketData.AnalysisPeriod,
+		buildKLineTimeframes(cfg.MarketData.KLineTimeframes),
 		&execution.Agent{
 			Enabled:                 cfg.Execution.Enabled,
 			DryRun:                  cfg.Execution.DryRun,
@@ -83,6 +84,23 @@ func main() {
 	default:
 		runSingle(ctx, flow, cfg, logger)
 	}
+}
+
+func buildKLineTimeframes(items []config.KLineTimeframeConfig) []analyst.KLineTimeframeConfig {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]analyst.KLineTimeframeConfig, 0, len(items))
+	for _, item := range items {
+		out = append(out, analyst.KLineTimeframeConfig{
+			Name:          item.Name,
+			Period:        item.Period,
+			Bars:          item.Bars,
+			RecentBars:    item.RecentBars,
+			IndicatorBars: item.IndicatorBars,
+		})
+	}
+	return out
 }
 
 func runSingle(ctx context.Context, flow *orchestrator.Workflow, cfg *config.Config, logger *logrus.Logger) {

@@ -3,6 +3,7 @@ package tools
 import "trading-go/tools/core"
 
 type MarketDataProvider = core.MarketDataProvider
+type KLineLimitProvider = core.KLineLimitProvider
 type AccountProvider = core.AccountProvider
 type TradeProvider = core.TradeProvider
 
@@ -100,6 +101,23 @@ func GetNews(symbol string, days int) ([]NewsItem, error) {
 
 func GetKline(symbol, period string) ([]KLine, error) {
 	return defaultProvider.GetKline(symbol, period)
+}
+
+func GetKlineWithLimit(symbol, period string, limit int) ([]KLine, error) {
+	if limit <= 0 {
+		return GetKline(symbol, period)
+	}
+	if provider, ok := defaultProvider.(KLineLimitProvider); ok {
+		return provider.GetKlineWithLimit(symbol, period, limit)
+	}
+	klines, err := defaultProvider.GetKline(symbol, period)
+	if err != nil {
+		return nil, err
+	}
+	if len(klines) <= limit {
+		return klines, nil
+	}
+	return klines[len(klines)-limit:], nil
 }
 
 func GetAccountSnapshot(symbols []string) (*AccountSnapshot, error) {

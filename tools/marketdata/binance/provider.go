@@ -205,6 +205,10 @@ func (p *Provider) GetNews(symbol string, days int) ([]core.NewsItem, error) {
 }
 
 func (p *Provider) GetKline(symbol, period string) ([]core.KLine, error) {
+	return p.GetKlineWithLimit(symbol, period, defaultKlineLimit)
+}
+
+func (p *Provider) GetKlineWithLimit(symbol, period string, limit int) ([]core.KLine, error) {
 	normalizedSymbol, err := NormalizeSymbol(symbol, p.defaultQuoteAsset)
 	if err != nil {
 		return nil, err
@@ -213,12 +217,18 @@ func (p *Provider) GetKline(symbol, period string) ([]core.KLine, error) {
 	if err != nil {
 		return nil, err
 	}
+	if limit <= 0 {
+		limit = defaultKlineLimit
+	}
+	if limit > 1500 {
+		limit = 1500
+	}
 
 	var resp klineResponse
 	if err := p.publicRequest(context.Background(), http.MethodGet, "/fapi/v1/klines", url.Values{
 		"symbol":   []string{normalizedSymbol},
 		"interval": []string{interval},
-		"limit":    []string{strconv.Itoa(defaultKlineLimit)},
+		"limit":    []string{strconv.Itoa(limit)},
 	}, &resp); err != nil {
 		return nil, fmt.Errorf("fetch binance futures klines for %s: %w", normalizedSymbol, err)
 	}

@@ -73,7 +73,7 @@ func TestBuildPortfolioPayloadIncludesTraderAndRiskInputs(t *testing.T) {
 	}
 }
 
-func TestClampPositionSize(t *testing.T) {
+func TestClampPositionRatio(t *testing.T) {
 	tests := []struct {
 		name               string
 		input              float64
@@ -87,8 +87,26 @@ func TestClampPositionSize(t *testing.T) {
 		{"clamp to one", 1.5, "执行", 0.4, 1},
 	}
 	for _, tt := range tests {
-		if got := clampPositionSize(tt.input, tt.execution, tt.traderPositionSize); got != tt.want {
+		if got := clampPositionRatio(tt.input, tt.execution, tt.traderPositionSize); got != tt.want {
 			t.Fatalf("%s: got %f want %f", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestNormalizePortfolioExecutionPlan(t *testing.T) {
+	action := normalizeAction("reduce", "调整后执行")
+	direction := normalizePortfolioDirection("", "hold", action, "批准将空头仓位从0.1515 BTC减至0.10 BTC")
+	ratio := clampPositionRatio(0, "调整后执行", 0)
+	targetQty := clampNonNegative(0.10)
+	size := normalizeApprovedPositionSize(0, "调整后执行", action, ratio, targetQty, 0)
+
+	if action != "reduce" {
+		t.Fatalf("expected reduce action, got %s", action)
+	}
+	if direction != "buy" {
+		t.Fatalf("expected buy direction for reducing short, got %s", direction)
+	}
+	if size != 0.10 || targetQty != 0.10 {
+		t.Fatalf("unexpected target qty normalization: size=%f target=%f", size, targetQty)
 	}
 }

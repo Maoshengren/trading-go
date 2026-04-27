@@ -16,9 +16,17 @@ type LLMConfig struct {
 }
 
 type MarketDataConfig struct {
-	Provider       string `mapstructure:"provider"`
-	DefaultRegion  string `mapstructure:"default_region"`
-	AnalysisPeriod string `mapstructure:"analysis_period"`
+	Provider        string                 `mapstructure:"provider"`
+	DefaultRegion   string                 `mapstructure:"default_region"`
+	KLineTimeframes []KLineTimeframeConfig `mapstructure:"kline_timeframes"`
+}
+
+type KLineTimeframeConfig struct {
+	Name          string `mapstructure:"name"`
+	Period        string `mapstructure:"period"`
+	Bars          int    `mapstructure:"bars"`
+	RecentBars    int    `mapstructure:"recent_bars"`
+	IndicatorBars int    `mapstructure:"indicator_bars"`
 }
 
 type LogConfig struct {
@@ -76,7 +84,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("execution_config.stop_loss_percent", 0.008)
 	v.SetDefault("market_data.provider", "auto")
 	v.SetDefault("market_data.default_region", "US")
-	v.SetDefault("market_data.analysis_period", "1d")
+	v.SetDefault("market_data.kline_timeframes", []map[string]any{
+		{"name": "execution", "period": "15m", "bars": 120, "recent_bars": 80, "indicator_bars": 20},
+		{"name": "trend", "period": "1h", "bars": 240, "recent_bars": 80, "indicator_bars": 30},
+		{"name": "macro", "period": "4h", "bars": 180, "recent_bars": 60, "indicator_bars": 30},
+	})
 	v.SetDefault("log_config.level", "info")
 	v.SetDefault("log_config.path", "logs/trading-go.log")
 	v.SetDefault("log_config.trace_dir", "logs/traces")

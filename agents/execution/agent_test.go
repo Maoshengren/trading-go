@@ -45,6 +45,7 @@ func TestBuildExecutionResultSkipsRejectAndHold(t *testing.T) {
 		TraderDecision: state.TraderDecision{Direction: "hold", PositionSize: 0.2},
 		PortfolioDecision: state.PortfolioDecision{
 			Execution:            "执行",
+			Direction:            "hold",
 			ApprovedPositionSize: 0.2,
 		},
 	}
@@ -72,6 +73,7 @@ func TestBuildExecutionResultSkipsZeroApprovedPosition(t *testing.T) {
 		TraderDecision: state.TraderDecision{Direction: "buy", PositionSize: 0.4},
 		PortfolioDecision: state.PortfolioDecision{
 			Execution:            "执行",
+			Direction:            "buy",
 			ApprovedPositionSize: 0,
 		},
 	}
@@ -106,6 +108,67 @@ func TestReductionPlanForExistingLongPosition(t *testing.T) {
 	}
 	if qty <= 0 || qty > 0.05 {
 		t.Fatalf("expected reduced quantity within current position size, got %f", qty)
+	}
+}
+
+func TestReductionPlanTreatsCryptoApprovedSizeAsTargetQuantity(t *testing.T) {
+	snapshot := &tools.AccountSnapshot{
+		CashBalances: []tools.CashBalance{
+			{Currency: "USDT", AvailableCash: 1000},
+		},
+		StockPositions: []tools.StockPosition{
+			{Symbol: "BTCUSDT", Quantity: -0.1515, PositionSide: "SHORT", Market: "crypto_futures", AccountChannel: "futures"},
+		},
+	}
+
+	qty, side, reduce, positionSide := reductionPlan("buy", snapshot.StockPositions[0], 0.10, 77743.5, snapshot)
+	if !reduce {
+		t.Fatal("expected reduction plan to be enabled")
+	}
+	if side != "buy" {
+		t.Fatalf("expected buy side for reducing short, got %s", side)
+	}
+	if positionSide != "SHORT" {
+		t.Fatalf("expected SHORT position side, got %s", positionSide)
+	}
+	if !nearlyEqual(qty, 0.0515) {
+		t.Fatalf("expected reduction quantity 0.0515, got %.8f", qty)
+	}
+}
+
+func TestPortfolioReductionCanInferSideWhenTraderHolds(t *testing.T) {
+	s := &state.AgentState{
+		FinalDecision: "调整后执行 | 批准将空头仓位从0.1515 BTC减至0.10 BTC",
+		TraderDecision: state.TraderDecision{
+			Direction: "hold",
+		},
+		PortfolioDecision: state.PortfolioDecision{
+			Execution:            "调整后执行",
+			Action:               "reduce",
+			Direction:            "buy",
+			ApprovedPositionSize: 0.10,
+			TargetPositionQty:    0.10,
+			Summary:              "执行减仓操作",
+		},
+	}
+	if !shouldReduceFromPortfolio(s) {
+		t.Fatal("expected portfolio reduction to be detected")
+	}
+	side, ok := sideForReducingPosition(tools.StockPosition{Symbol: "BTCUSDT", Quantity: -0.1515, PositionSide: "SHORT"})
+	if !ok || side != "buy" {
+		t.Fatalf("expected buy side for reducing short, got side=%s ok=%v", side, ok)
+	}
+}
+
+func TestApprovedExecutionSizePrefersTargetQtyForReduction(t *testing.T) {
+	size := approvedExecutionSize(state.PortfolioDecision{
+		Action:                "reduce",
+		ApprovedPositionSize:  0.4,
+		ApprovedPositionRatio: 0.2,
+		TargetPositionQty:     0.10,
+	})
+	if !nearlyEqual(size, 0.10) {
+		t.Fatalf("expected target qty 0.10, got %f", size)
 	}
 }
 

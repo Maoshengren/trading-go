@@ -14,9 +14,13 @@ type RiskReview struct {
 }
 
 type PortfolioDecision struct {
-	Execution            string
-	Summary              string
-	ApprovedPositionSize float64
+	Execution             string
+	Action                string
+	Direction             string
+	ApprovedPositionSize  float64
+	ApprovedPositionRatio float64
+	TargetPositionQty     float64
+	Summary               string
 }
 
 type ResearchDebateTurn struct {

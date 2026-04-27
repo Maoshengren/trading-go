@@ -235,9 +235,13 @@ func renderPortfolioDecision(d state.PortfolioDecision, fallback string) string 
 		return strings.TrimSpace(fallback)
 	}
 	return fmt.Sprintf(
-		"Execution: `%s`\n\nApproved Position Size: `%.4f`\n\n## Summary\n\n%s",
+		"Execution: `%s`\n\nAction: `%s`\n\nDirection: `%s`\n\nApproved Position Size: `%.4f`\n\nApproved Position Ratio: `%.4f`\n\nTarget Position Qty: `%.8f`\n\n## Summary\n\n%s",
 		blankDash(d.Execution),
+		blankDash(d.Action),
+		blankDash(d.Direction),
 		d.ApprovedPositionSize,
+		d.ApprovedPositionRatio,
+		d.TargetPositionQty,
 		blankDash(d.Summary),
 	)
 }

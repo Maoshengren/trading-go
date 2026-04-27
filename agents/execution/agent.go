@@ -76,14 +76,14 @@ func (a *Agent) buildExecutionResult(ctx context.Context, s *state.AgentState) (
 		return result, nil
 	}
 
-	side, ok := mapDirectionToSide(s.TraderDecision.Direction)
-	if !ok {
+	side, hasApprovedSide := mapDirectionToSide(firstNonEmpty(s.PortfolioDecision.Direction, s.TraderDecision.Direction))
+	portfolioReduction := shouldReduceFromPortfolio(s)
+	if !hasApprovedSide && !portfolioReduction {
 		result.Reason = "trader direction is hold or unsupported"
 		return result, nil
 	}
-	result.Side = side
 
-	positionFactor := s.PortfolioDecision.ApprovedPositionSize
+	positionFactor := approvedExecutionSize(s.PortfolioDecision)
 	if positionFactor <= 0 {
 		result.Reason = "approved position size is zero"
 		return result, nil
@@ -106,7 +106,23 @@ func (a *Agent) buildExecutionResult(ctx context.Context, s *state.AgentState) (
 	}
 	result.ReferencePrice = refPrice
 
-	if currentPos, ok := matchingPosition(s.Symbol, accountSnapshot); ok {
+	currentPos, hasPosition := matchingPosition(s.Symbol, accountSnapshot)
+	if !hasApprovedSide {
+		if portfolioReduction && hasPosition {
+			var ok bool
+			side, ok = sideForReducingPosition(currentPos)
+			if ok {
+				result.Reason = "portfolio requested reduction while trader direction is hold; inferred reduce side from current position"
+			}
+		}
+		if side == "" {
+			result.Reason = "portfolio requested reduction but no matching position was found"
+			return result, nil
+		}
+	}
+	result.Side = side
+
+	if hasPosition {
 		reduceQty, reduceSide, reduce, positionSide := reductionPlan(side, currentPos, positionFactor, refPrice, accountSnapshot)
 		if reduce {
 			if reduceQty <= 0 {
@@ -338,11 +354,31 @@ func reductionPlan(side string, pos tools.StockPosition, approvedPositionSize, r
 	}
 
 	currentAbsQty := math.Abs(currentQty)
+	if isCryptoFuturesPosition(pos) && approvedPositionSize > 0 && approvedPositionSize < currentAbsQty {
+		return currentAbsQty - approvedPositionSize, submitSide, true, positionSide
+	}
+
 	targetQty := desiredExecutionQuantity(approvedPositionSize, refPrice, snapshot)
 	if targetQty <= 0 || targetQty > currentAbsQty {
 		targetQty = currentAbsQty
 	}
 	return targetQty, submitSide, true, positionSide
+}
+
+func approvedExecutionSize(d state.PortfolioDecision) float64 {
+	switch normalizePortfolioAction(d.Action) {
+	case "reduce", "close":
+		if d.TargetPositionQty > 0 {
+			return d.TargetPositionQty
+		}
+	}
+	if d.ApprovedPositionSize > 0 {
+		return d.ApprovedPositionSize
+	}
+	if d.ApprovedPositionRatio > 0 {
+		return d.ApprovedPositionRatio
+	}
+	return 0
 }
 
 func desiredExecutionQuantity(positionFactor, refPrice float64, snapshot *tools.AccountSnapshot) float64 {
@@ -399,6 +435,71 @@ func mapDirectionToSide(direction string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func shouldReduceFromPortfolio(s *state.AgentState) bool {
+	if s == nil {
+		return false
+	}
+	switch normalizePortfolioAction(s.PortfolioDecision.Action) {
+	case "reduce", "close":
+		return true
+	}
+	if normalizeExecution(s.PortfolioDecision.Execution) != "调整后执行" && parseFinalExecutionVerdict(s.FinalDecision) != "modify" {
+		return false
+	}
+	text := strings.ToLower(s.FinalDecision + " " + s.PortfolioDecision.Summary + " " + s.RiskReview.Suggestion)
+	for _, keyword := range []string{"减仓", "降低仓位", "降低暴露", "reduce", "trim", "decrease"} {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func sideForReducingPosition(pos tools.StockPosition) (string, bool) {
+	switch {
+	case pos.Quantity > 0:
+		return "sell", true
+	case pos.Quantity < 0:
+		return "buy", true
+	default:
+		return "", false
+	}
+}
+
+func isCryptoFuturesPosition(pos tools.StockPosition) bool {
+	market := strings.ToLower(strings.TrimSpace(pos.Market))
+	channel := strings.ToLower(strings.TrimSpace(pos.AccountChannel))
+	symbol := strings.ToUpper(strings.TrimSpace(pos.Symbol))
+	return strings.Contains(market, "crypto") || strings.Contains(channel, "futures") || strings.HasSuffix(symbol, "USDT")
+}
+
+func normalizeExecution(v string) string {
+	switch strings.TrimSpace(v) {
+	case "执行", "拒绝", "调整后执行":
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
+}
+
+func normalizePortfolioAction(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "open", "increase", "reduce", "close", "hold", "reject":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return ""
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func applyProtectivePrices(result *state.ExecutionResult, cfg Agent, side string, refPrice float64) {
