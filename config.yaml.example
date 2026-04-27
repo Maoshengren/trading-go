@@ -1,0 +1,51 @@
+symbol: BTCUSDT
+debate_rounds: 2
+loop_interval_seconds: 900
+mode: single # single | loop
+
+analyst_config:
+  enabled: [technical] # fundamental | sentiment | news | technical
+
+execution_config:
+  enabled: true
+  dry_run: true # Set to false only after confirming testnet/live trading credentials and risk controls.
+  order_type: market # market | limit
+  time_in_force: GTC
+  leverage: 3
+  price_period: 1m # Used to estimate execution reference price.
+  protective_orders_enabled: true # Submit TP/SL protective orders after a successful entry order.
+  take_profit_percent: 0.015 # 1.5% take profit.
+  stop_loss_percent: 0.008 # 0.8% stop loss.
+
+market_data:
+  provider: binance_futures # auto | longbridge | binance | binance_futures
+  default_region: US
+  # The first timeframe is the primary trading timeframe. Later items are trend context.
+  kline_timeframes:
+    - name: execution
+      period: 15m
+      bars: 192 # 2 days, execution rhythm and local volatility.
+      recent_bars: 96
+      indicator_bars: 32
+    - name: trend
+      period: 1h
+      bars: 240 # 10 days, intraday trend anchor.
+      recent_bars: 96
+      indicator_bars: 40
+    - name: macro
+      period: 4h
+      bars: 180 # 30 days, larger trend and key levels.
+      recent_bars: 72
+      indicator_bars: 40
+
+log_config:
+  level: info
+  path: logs/trading-go.log
+  trace_dir: logs/traces
+
+llm_config:
+  provider: deepseek # openai | deepseek
+  model: deepseek-v4-flash
+  api_key: YOUR_LLM_API_KEY
+  base_url: https://api.deepseek.com/v1
+  temperature: 0.2
