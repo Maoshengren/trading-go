@@ -13,7 +13,7 @@ config.yaml
 coverage.out
 logs/
 /reports/
-
+.idea
 bin/
 dist/
 build/
